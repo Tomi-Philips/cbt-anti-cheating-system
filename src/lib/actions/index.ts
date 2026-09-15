@@ -254,16 +254,14 @@ export async function getLecturers(departmentId?: string) {
 }
 
 export async function createLecturer(formData: FormData) {
-  const supabase = await createClient();
-
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
   const fullName = formData.get("full_name") as string;
   const staffId = formData.get("staff_id") as string;
   const departmentId = formData.get("department_id") as string;
   const facultyId = formData.get("faculty_id") as string;
+  const status = (formData.get("status") as string) || "active";
 
-  // Create auth user using admin client (requires service role key)
   const adminClient = createAdminClient();
   const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
     email,
@@ -277,7 +275,6 @@ export async function createLecturer(formData: FormData) {
 
   if (authError) return { error: authError.message };
 
-  // Create profile explicitly (the trigger may fail due to RLS)
   const { error: profileError } = await adminClient
     .from("profiles")
     .insert({
@@ -285,23 +282,21 @@ export async function createLecturer(formData: FormData) {
       full_name: fullName,
       email: email,
       role: "lecturer",
-      status: "active",
+      status,
     });
 
   if (profileError) {
-    // If profile already exists from trigger, that's fine
     if (profileError.code !== "23505") {
       return { error: profileError.message };
     }
   }
 
-  // Create lecturer record
-  const { error } = await supabase.from("lecturers").insert({
+  const { error } = await adminClient.from("lecturers").insert({
     profile_id: authData.user.id,
     staff_id: staffId,
     department_id: departmentId,
     faculty_id: facultyId,
-    status: "active",
+    status,
   });
 
   if (error) return { error: error.message };
@@ -311,64 +306,95 @@ export async function createLecturer(formData: FormData) {
 }
 
 export async function updateLecturer(id: string, formData: FormData) {
-  const supabase = await createClient();
+  const email = formData.get("email") as string;
+  const password = formData.get("password") as string;
+  const fullName = formData.get("full_name") as string;
+  const staffId = formData.get("staff_id") as string;
+  const departmentId = formData.get("department_id") as string;
+  const facultyId = formData.get("faculty_id") as string;
+  const status = (formData.get("status") as string) || "active";
+  const profileId = formData.get("profile_id") as string;
 
-  const { error } = await supabase
+  if (!profileId) {
+    return { error: "Profile ID is required" };
+  }
+
+  const adminClient = createAdminClient();
+  const authUpdates: {
+    email?: string;
+    password?: string;
+    email_confirm?: boolean;
+    user_metadata?: { full_name: string; role: "lecturer" };
+  } = {
+    user_metadata: { full_name: fullName, role: "lecturer" },
+  };
+
+  if (email) {
+    authUpdates.email = email;
+    authUpdates.email_confirm = true;
+  }
+  if (password) {
+    authUpdates.password = password;
+  }
+
+  const { error: authError } = await adminClient.auth.admin.updateUserById(profileId, authUpdates);
+  if (authError) return { error: authError.message };
+
+  const { error: lecturerError } = await adminClient
     .from("lecturers")
     .update({
-      staff_id: formData.get("staff_id") as string,
-      department_id: formData.get("department_id") as string,
-      faculty_id: formData.get("faculty_id") as string,
-      status: formData.get("status") as string,
+      staff_id: staffId,
+      department_id: departmentId,
+      faculty_id: facultyId,
+      status,
     })
     .eq("id", id);
 
-  if (error) return { error: error.message };
+  if (lecturerError) return { error: lecturerError.message };
 
-  // Also update profile
-  const profileId = formData.get("profile_id") as string;
-  if (profileId) {
-    await supabase
-      .from("profiles")
-      .update({
-        full_name: formData.get("full_name") as string,
-        status: formData.get("status") as string,
-      })
-      .eq("id", profileId);
-  }
+  const { error: profileError } = await adminClient
+    .from("profiles")
+    .update({
+      full_name: fullName,
+      email,
+      status,
+    })
+    .eq("id", profileId);
+
+  if (profileError) return { error: profileError.message };
 
   revalidatePath("/admin/lecturers");
   return { success: true };
 }
 
 export async function deleteLecturer(id: string, profileId: string) {
-  const supabase = await createClient();
-
-  // Delete lecturer record first
-  const { error } = await supabase.from("lecturers").delete().eq("id", id);
-  if (error) return { error: error.message };
-
-  // Delete auth user using admin client (requires service role key)
   const adminClient = createAdminClient();
-  await adminClient.auth.admin.deleteUser(profileId);
+
+  if (profileId) {
+    const { error: authError } = await adminClient.auth.admin.deleteUser(profileId);
+    if (authError) return { error: authError.message };
+  }
+
+  const { error } = await adminClient.from("lecturers").delete().eq("id", id);
+  if (error) return { error: error.message };
 
   revalidatePath("/admin/lecturers");
   return { success: true };
 }
 
 // Student actions
-export async function getStudents(lecturerId?: string, departmentId?: string) {
+export async function getStudents(departmentId?: string, programmeId?: string) {
   const supabase = await createClient();
   let query = supabase
     .from("students")
-    .select("*, profile:profiles(*), department:departments(*), faculty:faculties(*)")
+    .select("*, profile:profiles(*), department:departments(*), faculty:faculties(*), programme:programmes(*)")
     .order("created_at", { ascending: false });
 
-  if (lecturerId) {
-    query = query.eq("lecturer_id", lecturerId);
-  }
   if (departmentId) {
     query = query.eq("department_id", departmentId);
+  }
+  if (programmeId) {
+    query = query.eq("programme_id", programmeId);
   }
 
   const { data, error } = await query;
@@ -377,19 +403,17 @@ export async function getStudents(lecturerId?: string, departmentId?: string) {
 }
 
 export async function createStudent(formData: FormData) {
-  const supabase = await createClient();
-
   const email = formData.get("email") as string;
   const fullName = formData.get("full_name") as string;
   const studentId = formData.get("student_id") as string;
   const level = formData.get("level") as string;
   const departmentId = formData.get("department_id") as string;
   const facultyId = formData.get("faculty_id") as string;
-  const lecturerId = formData.get("lecturer_id") as string;
+  const programmeId = (formData.get("programme_id") as string) || null;
+  const status = (formData.get("status") as string) || "active";
 
   const password = DEFAULT_STUDENT_PASSWORD;
 
-  // Create auth user using admin client (requires service role key)
   const adminClient = createAdminClient();
   const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
     email,
@@ -403,7 +427,6 @@ export async function createStudent(formData: FormData) {
 
   if (authError) return { error: authError.message };
 
-  // Create profile explicitly (the trigger may fail due to RLS)
   const { error: profileError } = await adminClient
     .from("profiles")
     .insert({
@@ -411,7 +434,7 @@ export async function createStudent(formData: FormData) {
       full_name: fullName,
       email: email,
       role: "student",
-      status: "active",
+      status,
     });
 
   if (profileError) {
@@ -420,63 +443,109 @@ export async function createStudent(formData: FormData) {
     }
   }
 
-  // Create student record using admin client (bypasses RLS)
   const { error } = await adminClient.from("students").insert({
     profile_id: authData.user.id,
     student_id: studentId,
     department_id: departmentId,
     faculty_id: facultyId,
-    lecturer_id: lecturerId,
+    programme_id: programmeId,
     level,
-    status: "active",
+    status,
   });
 
   if (error) return { error: error.message };
 
+  revalidatePath("/admin/students");
   revalidatePath("/lecturer/students");
   return { success: true, defaultPassword: password };
 }
 
 export async function updateStudent(id: string, formData: FormData) {
-  const supabase = await createClient();
+  const email = formData.get("email") as string;
+  const fullName = formData.get("full_name") as string;
+  const studentId = formData.get("student_id") as string;
+  const level = formData.get("level") as string;
+  const departmentId = formData.get("department_id") as string;
+  const facultyId = formData.get("faculty_id") as string;
+  const programmeId = (formData.get("programme_id") as string) || null;
+  const status = (formData.get("status") as string) || "active";
+  const profileId = formData.get("profile_id") as string;
 
-  const { error } = await supabase
+  if (!profileId) {
+    return { error: "Profile ID is required" };
+  }
+
+  const adminClient = createAdminClient();
+  const { error: authError } = await adminClient.auth.admin.updateUserById(profileId, {
+    email,
+    email_confirm: true,
+    user_metadata: { full_name: fullName, role: "student" },
+  });
+
+  if (authError) return { error: authError.message };
+
+  const { error: studentError } = await adminClient
     .from("students")
     .update({
-      student_id: formData.get("student_id") as string,
-      level: formData.get("level") as string,
-      status: formData.get("status") as string,
+      student_id: studentId,
+      department_id: departmentId,
+      faculty_id: facultyId,
+      programme_id: programmeId,
+      level,
+      status,
     })
     .eq("id", id);
 
-  if (error) return { error: error.message };
+  if (studentError) return { error: studentError.message };
 
-  // Also update profile
-  const profileId = formData.get("profile_id") as string;
+  const { error: profileError } = await adminClient
+    .from("profiles")
+    .update({
+      full_name: fullName,
+      email,
+      status,
+    })
+    .eq("id", profileId);
+
+  if (profileError) return { error: profileError.message };
+
+  revalidatePath("/admin/students");
+  revalidatePath("/lecturer/students");
+  return { success: true };
+}
+
+export async function deleteStudent(id: string, profileId: string) {
+  const adminClient = createAdminClient();
+
   if (profileId) {
-    await supabase
-      .from("profiles")
-      .update({
-        full_name: formData.get("full_name") as string,
-        status: formData.get("status") as string,
-      })
-      .eq("id", profileId);
+    const { error: authError } = await adminClient.auth.admin.deleteUser(profileId);
+    if (authError) return { error: authError.message };
   }
 
+  const { error } = await adminClient.from("students").delete().eq("id", id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin/students");
   revalidatePath("/lecturer/students");
   return { success: true };
 }
 
 // Course actions
-export async function getCourses(lecturerId?: string) {
+export async function getCourses(departmentId?: string, academicSession?: string, semester?: string) {
   const supabase = await createClient();
   let query = supabase
     .from("courses")
-    .select("*, department:departments(*), lecturer:lecturers(*, profile:profiles(*))")
+    .select("*, department:departments(*)")
     .order("created_at", { ascending: false });
 
-  if (lecturerId) {
-    query = query.eq("lecturer_id", lecturerId);
+  if (departmentId) {
+    query = query.eq("department_id", departmentId);
+  }
+  if (academicSession) {
+    query = query.eq("academic_session", academicSession);
+  }
+  if (semester) {
+    query = query.eq("semester", semester);
   }
 
   const { data, error } = await query;
@@ -491,12 +560,15 @@ export async function createCourse(formData: FormData) {
     code: formData.get("code") as string,
     title: formData.get("title") as string,
     department_id: formData.get("department_id") as string,
-    lecturer_id: formData.get("lecturer_id") as string,
-    status: "active",
+    level: formData.get("level") as string,
+    semester: formData.get("semester") as string,
+    credit_unit: parseInt(formData.get("credit_unit") as string) || 0,
+    academic_session: formData.get("academic_session") as string,
+    status: (formData.get("status") as string) || "active",
   });
 
   if (error) return { error: error.message };
-  revalidatePath("/lecturer/courses");
+  revalidatePath("/admin/courses");
   return { success: true };
 }
 
@@ -508,12 +580,17 @@ export async function updateCourse(id: string, formData: FormData) {
     .update({
       code: formData.get("code") as string,
       title: formData.get("title") as string,
+      department_id: formData.get("department_id") as string,
+      level: formData.get("level") as string,
+      semester: formData.get("semester") as string,
+      credit_unit: parseInt(formData.get("credit_unit") as string) || 0,
+      academic_session: formData.get("academic_session") as string,
       status: formData.get("status") as string,
     })
     .eq("id", id);
 
   if (error) return { error: error.message };
-  revalidatePath("/lecturer/courses");
+  revalidatePath("/admin/courses");
   return { success: true };
 }
 
@@ -521,20 +598,20 @@ export async function deleteCourse(id: string) {
   const supabase = await createClient();
   const { error } = await supabase.from("courses").delete().eq("id", id);
   if (error) return { error: error.message };
-  revalidatePath("/lecturer/courses");
+  revalidatePath("/admin/courses");
   return { success: true };
 }
 
 // Exam actions
-export async function getExams(lecturerId?: string) {
+export async function getExams(createdByLecturerId?: string) {
   const supabase = await createClient();
   let query = supabase
     .from("exams")
     .select("*, course:courses(*), lecturer:lecturers(*, profile:profiles(*))")
     .order("created_at", { ascending: false });
 
-  if (lecturerId) {
-    query = query.eq("lecturer_id", lecturerId);
+  if (createdByLecturerId) {
+    query = query.eq("created_by_lecturer_id", createdByLecturerId);
   }
 
   const { data, error } = await query;
@@ -562,7 +639,7 @@ export async function createExam(formData: FormData) {
     .insert({
       title: formData.get("title") as string,
       course_id: formData.get("course_id") as string,
-      lecturer_id: formData.get("lecturer_id") as string,
+      created_by_lecturer_id: (formData.get("created_by_lecturer_id") as string) || null,
       instructions: (formData.get("instructions") as string) || "",
       duration_minutes: parseInt(formData.get("duration_minutes") as string) || 60,
       start_time: (formData.get("start_time") as string) || null,
@@ -906,7 +983,7 @@ export async function submitExam(attemptId: string, isAutoSubmit = false) {
     const studentAnswer = answers?.find((a) => a.question_id === question.id);
 
     if (studentAnswer?.option_id) {
-      const correctOption = question.options.find((o: any) => o.is_correct);
+      const correctOption = question.options.find((o: { id: string; is_correct: boolean }) => o.is_correct);
       if (correctOption && studentAnswer.option_id === correctOption.id) {
         correctAnswers++;
         score += question.marks;
@@ -1033,15 +1110,19 @@ export async function getAdminStats() {
   const [
     { count: faculties },
     { count: departments },
+    { count: programmes },
     { count: lecturers },
     { count: students },
+    { count: courses },
     { count: activeExams },
     { count: violations },
   ] = await Promise.all([
     supabase.from("faculties").select("*", { count: "exact", head: true }),
     supabase.from("departments").select("*", { count: "exact", head: true }),
+    supabase.from("programmes").select("*", { count: "exact", head: true }),
     supabase.from("lecturers").select("*", { count: "exact", head: true }),
     supabase.from("students").select("*", { count: "exact", head: true }),
+    supabase.from("courses").select("*", { count: "exact", head: true }),
     supabase.from("exams").select("*", { count: "exact", head: true }).in("status", ["published", "active"]),
     supabase.from("violations").select("*", { count: "exact", head: true }),
   ]);
@@ -1049,8 +1130,10 @@ export async function getAdminStats() {
   return {
     total_faculties: faculties || 0,
     total_departments: departments || 0,
+    total_programmes: programmes || 0,
     total_lecturers: lecturers || 0,
     total_students: students || 0,
+    total_courses: courses || 0,
     active_exams: activeExams || 0,
     recent_violations: violations || 0,
   };
@@ -1060,18 +1143,20 @@ export async function getLecturerStats(lecturerId: string) {
   const supabase = await createClient();
 
   const [
-    { count: students },
     { count: courses },
     { count: activeExams },
     { count: upcomingExams },
     { count: results },
+    { count: students },
   ] = await Promise.all([
-    supabase.from("students").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId),
-    supabase.from("courses").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId),
-    supabase.from("exams").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId).eq("status", "active"),
-    supabase.from("exams").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId).eq("status", "scheduled"),
-    supabase.from("results").select("*", { count: "exact", head: true }).eq("exam_id", 
-      supabase.from("exams").select("id").eq("lecturer_id", lecturerId).limit(100) as any
+    supabase.from("course_allocations").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId),
+    supabase.from("exams").select("*", { count: "exact", head: true }).eq("created_by_lecturer_id", lecturerId).eq("status", "active"),
+    supabase.from("exams").select("*", { count: "exact", head: true }).eq("created_by_lecturer_id", lecturerId).eq("status", "scheduled"),
+    supabase.from("results").select("*", { count: "exact", head: true }).eq("exam_id",
+      supabase.from("exams").select("id").eq("created_by_lecturer_id", lecturerId).limit(100) as any
+    ),
+    supabase.from("course_registrations").select("*", { count: "exact", head: true }).eq("course_id",
+      supabase.from("course_allocations").select("course_id").eq("lecturer_id", lecturerId) as any
     ),
   ]);
 
@@ -1103,6 +1188,207 @@ export async function getStudentStats(studentId: string) {
     recent_results: results || 0,
     total_violations: violations || 0,
   };
+}
+
+// Programme actions
+export async function getProgrammes(departmentId?: string) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("programmes")
+    .select("*, department:departments(*)")
+    .order("created_at", { ascending: false });
+
+  if (departmentId) {
+    query = query.eq("department_id", departmentId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function createProgramme(formData: FormData) {
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("programmes").insert({
+    name: formData.get("name") as string,
+    code: formData.get("code") as string,
+    department_id: formData.get("department_id") as string,
+    duration_years: parseInt(formData.get("duration_years") as string) || 4,
+    status: (formData.get("status") as string) || "active",
+  });
+
+  if (error) {
+    if (error.code === "23505") {
+      return { error: "A programme with this code already exists in this department" };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin/programmes");
+  return { success: true };
+}
+
+export async function updateProgramme(id: string, formData: FormData) {
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("programmes")
+    .update({
+      name: formData.get("name") as string,
+      code: formData.get("code") as string,
+      department_id: formData.get("department_id") as string,
+      duration_years: parseInt(formData.get("duration_years") as string) || 4,
+      status: formData.get("status") as string,
+    })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/admin/programmes");
+  return { success: true };
+}
+
+export async function deleteProgramme(id: string) {
+  const supabase = await createClient();
+  const { error } = await supabase.from("programmes").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath("/admin/programmes");
+  return { success: true };
+}
+
+// Course allocation actions
+export async function getAllocations(lecturerId?: string, courseId?: string) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("course_allocations")
+    .select("*, course:courses(*, department:departments(*)), lecturer:lecturers(*, profile:profiles(*))")
+    .order("created_at", { ascending: false });
+
+  if (lecturerId) {
+    query = query.eq("lecturer_id", lecturerId);
+  }
+  if (courseId) {
+    query = query.eq("course_id", courseId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function allocateLecturer(formData: FormData) {
+  const supabase = await createClient();
+
+  const { error } = await supabase.from("course_allocations").insert({
+    course_id: formData.get("course_id") as string,
+    lecturer_id: formData.get("lecturer_id") as string,
+    academic_session: formData.get("academic_session") as string,
+    semester: formData.get("semester") as string,
+  });
+
+  if (error) {
+    if (error.code === "23505") {
+      return { error: "This lecturer is already allocated to this course for this session" };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin/courses");
+  revalidatePath("/admin/programmes");
+  return { success: true };
+}
+
+export async function unallocateLecturer(courseId: string, lecturerId: string, academicSession: string, semester: string) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("course_allocations")
+    .delete()
+    .eq("course_id", courseId)
+    .eq("lecturer_id", lecturerId)
+    .eq("academic_session", academicSession)
+    .eq("semester", semester);
+
+  if (error) return { error: error.message };
+  revalidatePath("/admin/courses");
+  return { success: true };
+}
+
+// Course registration actions
+export async function getRegistrations(studentId?: string, courseId?: string, lecturerId?: string) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("course_registrations")
+    .select("*, student:students(*, profile:profiles(*)), course:courses(*, department:departments(*))")
+    .order("registered_at", { ascending: false });
+
+  if (studentId) {
+    query = query.eq("student_id", studentId);
+  }
+  if (courseId) {
+    query = query.eq("course_id", courseId);
+  }
+  if (lecturerId) {
+    query = query.eq("course_id",
+      supabase.from("course_allocations").select("course_id").eq("lecturer_id", lecturerId) as any
+    );
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function syncCourseRegistrations(courseId?: string) {
+  const supabase = await createClient();
+
+  let query = supabase
+    .from("courses")
+    .select("id, department_id, level, academic_session, semester, status")
+    .eq("status", "active");
+
+  if (courseId) {
+    query = query.eq("id", courseId);
+  }
+
+  const { data: courses, error: coursesError } = await query;
+  if (coursesError) return { error: coursesError.message };
+
+  const adminClient = createAdminClient();
+  let inserted = 0;
+
+  for (const course of courses || []) {
+    if (!course.department_id || !course.level || !course.academic_session || !course.semester) continue;
+
+    const { data: students, error: studentsError } = await adminClient
+      .from("students")
+      .select("id")
+      .eq("status", "active")
+      .eq("department_id", course.department_id)
+      .eq("level", course.level);
+
+    if (studentsError) return { error: studentsError.message };
+
+    const rows = (students || []).map((s) => ({
+      student_id: s.id,
+      course_id: course.id,
+      academic_session: course.academic_session,
+      semester: course.semester,
+      source: "auto" as const,
+    }));
+
+    if (rows.length === 0) continue;
+
+    const { error: insertError, count } = await adminClient
+      .from("course_registrations")
+      .upsert(rows, { onConflict: "student_id,course_id,academic_session,semester" });
+
+    if (insertError) return { error: insertError.message };
+    inserted += count || rows.length;
+  }
+
+  revalidatePath("/admin/courses");
+  revalidatePath("/admin/students");
+  return { success: true, inserted };
 }
 
 // CSV Question Import
@@ -1307,17 +1593,17 @@ export async function bulkCreateStudents(
   let created = 0;
 
   // Fetch related data to resolve names to IDs
-  const [{ data: faculties }, { data: departments }, { data: lecturers }] = await Promise.all([
+  const [{ data: faculties }, { data: departments }, { data: programmes }] = await Promise.all([
     supabase.from("faculties").select("id, name, code"),
     supabase.from("departments").select("id, name, code, faculty_id"),
-    supabase.from("lecturers").select("id, staff_id, profile:profiles(full_name)"),
+    supabase.from("programmes").select("id, name, code, department_id"),
   ]);
   const facultyMap = new Map((faculties || []).map((f) => [f.name.toLowerCase(), f]));
   const facultyCodeMap = new Map((faculties || []).map((f) => [f.code.toLowerCase(), f]));
   const deptMap = new Map((departments || []).map((d) => [d.name.toLowerCase(), d]));
   const deptCodeMap = new Map((departments || []).map((d) => [d.code.toLowerCase(), d]));
-  const lecturerMap = new Map(
-    (lecturers || []).map((l) => [l.staff_id.toLowerCase(), l])
+  const programmeMap = new Map(
+    (programmes || []).map((p) => [p.name.toLowerCase(), p])
   );
 
   for (let i = 0; i < rows.length; i++) {
@@ -1327,7 +1613,7 @@ export async function bulkCreateStudents(
     const studentId = row["student_id"] || row["studentid"] || "";
     const departmentName = row["department"] || row["department_name"] || "";
     const facultyName = row["faculty"] || row["faculty_name"] || "";
-    const lecturerStaffId = row["lecturer_staff_id"] || row["lecturer"] || "";
+    const programmeName = row["programme"] || row["programme_name"] || "";
     const level = row["level"] || "100";
 
     if (!fullName || !email || !studentId) {
@@ -1353,11 +1639,11 @@ export async function bulkCreateStudents(
       continue;
     }
 
-    // Resolve lecturer
-    const lecturer = lecturerMap.get(lecturerStaffId.toLowerCase());
-    if (!lecturer) {
-      errors.push(`Row ${i + 2}: Lecturer with staff_id "${lecturerStaffId}" not found`);
-      continue;
+    // Resolve programme
+    let programmeId: string | null = null;
+    if (programmeName) {
+      const prog = programmeMap.get(programmeName.toLowerCase());
+      if (prog) programmeId = prog.id;
     }
 
     // Create auth user
@@ -1393,7 +1679,7 @@ export async function bulkCreateStudents(
       student_id: studentId,
       department_id: dept.id,
       faculty_id: faculty.id,
-      lecturer_id: lecturer.id,
+      programme_id: programmeId,
       level,
       status: "active",
     });

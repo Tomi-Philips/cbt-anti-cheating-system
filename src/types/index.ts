@@ -62,7 +62,7 @@ export interface Student {
   student_id: string;
   department_id: string;
   faculty_id: string;
-  lecturer_id: string;
+  programme_id: string | null;
   level: string;
   status: ProfileStatus;
   created_at: string;
@@ -70,7 +70,19 @@ export interface Student {
   profile?: Profile;
   department?: Department;
   faculty?: Faculty;
-  lecturer?: Lecturer;
+  programme?: Programme;
+}
+
+export interface Programme {
+  id: string;
+  department_id: string;
+  name: string;
+  code: string;
+  duration_years: number;
+  status: ProfileStatus;
+  created_at: string;
+  updated_at: string;
+  department?: Department;
 }
 
 export interface Course {
@@ -78,19 +90,43 @@ export interface Course {
   code: string;
   title: string;
   department_id: string;
-  lecturer_id: string;
+  level: string;
+  semester: string;
+  credit_unit: number;
+  academic_session: string;
   status: ProfileStatus;
   created_at: string;
   updated_at: string;
   department?: Department;
+}
+
+export interface CourseAllocation {
+  course_id: string;
+  lecturer_id: string;
+  academic_session: string;
+  semester: string;
+  created_at: string;
+  course?: Course;
   lecturer?: Lecturer;
+}
+
+export interface CourseRegistration {
+  student_id: string;
+  course_id: string;
+  academic_session: string;
+  semester: string;
+  status: string;
+  registered_at: string;
+  source: string;
+  student?: Student;
+  course?: Course;
 }
 
 export interface Exam {
   id: string;
   title: string;
   course_id: string;
-  lecturer_id: string;
+  created_by_lecturer_id: string | null;
   instructions: string;
   duration_minutes: number;
   start_time: string | null;

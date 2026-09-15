@@ -63,7 +63,7 @@ export default function CreateExamPage() {
     formData.set("randomize_questions", form.randomize_questions.toString());
     formData.set("randomize_options", form.randomize_options.toString());
     formData.set("violation_threshold", form.violation_threshold.toString());
-    formData.set("lecturer_id", lecturer.id);
+    formData.set("created_by_lecturer_id", lecturer.id);
 
     try {
       const result = await createExam(formData);

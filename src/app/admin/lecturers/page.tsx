@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { getLecturers, createLecturer, deleteLecturer, getFaculties, getDepartments, bulkCreateLecturers } from "@/lib/actions";
+import { getLecturers, createLecturer, updateLecturer, deleteLecturer, getFaculties, getDepartments, bulkCreateLecturers } from "@/lib/actions";
 import { Button, Card, Input, Modal, Badge } from "@/components/ui";
 import { Toaster, toast } from "sonner";
 
@@ -26,6 +26,7 @@ export default function LecturersPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState<LecturerRecord | null>(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [filterFaculty, setFilterFaculty] = useState("");
@@ -45,6 +46,7 @@ export default function LecturersPage() {
     faculty_id: "",
     password: "",
     status: "active",
+    profile_id: "",
   });
 
   useEffect(() => {
@@ -59,7 +61,23 @@ export default function LecturersPage() {
   }, []);
 
   function openCreate() {
-    setForm({ full_name: "", email: "", staff_id: "", department_id: "", faculty_id: "", password: "", status: "active" });
+    setEditing(null);
+    setForm({ full_name: "", email: "", staff_id: "", department_id: "", faculty_id: "", password: "", status: "active", profile_id: "" });
+    setShowModal(true);
+  }
+
+  function openEdit(lecturer: LecturerRecord) {
+    setEditing(lecturer);
+    setForm({
+      full_name: lecturer.profile?.full_name || "",
+      email: lecturer.profile?.email || "",
+      staff_id: lecturer.staff_id,
+      department_id: lecturer.department_id,
+      faculty_id: lecturer.faculty_id,
+      password: "",
+      status: lecturer.status,
+      profile_id: lecturer.profile?.id || "",
+    });
     setShowModal(true);
   }
 
@@ -75,14 +93,18 @@ export default function LecturersPage() {
     formData.set("faculty_id", form.faculty_id);
     formData.set("password", form.password);
     formData.set("status", form.status);
+    formData.set("profile_id", form.profile_id);
 
     try {
-      const result = await createLecturer(formData);
+      const result = editing
+        ? await updateLecturer(editing.id, formData)
+        : await createLecturer(formData);
       if (result.error) {
         toast.error(result.error);
         return;
       }
-      toast.success("Lecturer created successfully");
+      toast.success(editing ? "Lecturer updated successfully" : "Lecturer created successfully");
+      setEditing(null);
       setShowModal(false);
       const data = await getLecturers();
       setLecturers(data);
@@ -223,9 +245,14 @@ export default function LecturersPage() {
                       <Badge variant={lect.status === "active" ? "success" : "default"}>{lect.status}</Badge>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => handleDelete(lect.id, lect.profile?.id || "")} className="text-sm text-red-600 hover:text-red-700">
-                        Delete
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => openEdit(lect)} className="text-sm text-[var(--primary)] hover:text-[var(--primary-dark)]">
+                          Edit
+                        </button>
+                        <button onClick={() => handleDelete(lect.id, lect.profile?.id || "")} className="text-sm text-red-600 hover:text-red-700">
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -236,7 +263,7 @@ export default function LecturersPage() {
       </Card>
 
       {/* Single create modal */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="Add Lecturer">
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editing ? "Edit Lecturer" : "Add Lecturer"}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input label="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} placeholder="e.g. Dr. John Smith" required />
           <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="lecturer@university.edu" required />
@@ -259,10 +286,17 @@ export default function LecturersPage() {
               ))}
             </select>
           </div>
-          <Input label="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Minimum 6 characters" required minLength={6} />
+          <Input label="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={editing ? "Leave blank to keep current password" : "Minimum 6 characters"} required={!editing} minLength={editing ? undefined : 6} />
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-[var(--text)]">Status</label>
+            <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]">
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Create</Button>
+            <Button type="submit" loading={saving}>{editing ? "Update" : "Create"}</Button>
           </div>
         </form>
       </Modal>

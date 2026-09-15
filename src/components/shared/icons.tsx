@@ -30,6 +30,16 @@ export const adminNavItems = [
     icon: <Building size={18} />,
   },
   {
+    label: "Programmes",
+    href: "/admin/programmes",
+    icon: <BookOpen size={18} />,
+  },
+  {
+    label: "Courses",
+    href: "/admin/courses",
+    icon: <ClipboardList size={18} />,
+  },
+  {
     label: "Lecturers",
     href: "/admin/lecturers",
     icon: <Users size={18} />,

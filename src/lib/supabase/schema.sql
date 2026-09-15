@@ -51,6 +51,19 @@ create table if not exists lecturers (
   updated_at timestamptz default now()
 );
 
+-- Programmes (degree track run by a department)
+create table if not exists programmes (
+  id uuid default uuid_generate_v4() primary key,
+  department_id uuid references departments(id) on delete cascade not null,
+  name text not null,
+  code text not null,
+  duration_years integer not null default 4 check (duration_years between 1 and 8),
+  status text not null default 'active' check (status in ('active', 'inactive')),
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(code, department_id)
+);
+
 -- Students
 create table if not exists students (
   id uuid default uuid_generate_v4() primary key,
@@ -58,7 +71,7 @@ create table if not exists students (
   student_id text not null unique,
   department_id uuid references departments(id) on delete cascade not null,
   faculty_id uuid references faculties(id) on delete cascade not null,
-  lecturer_id uuid references lecturers(id) on delete cascade not null,
+  programme_id uuid references programmes(id) on delete set null,
   level text not null,
   status text not null default 'active' check (status in ('active', 'inactive')),
   created_at timestamptz default now(),
@@ -71,10 +84,36 @@ create table if not exists courses (
   code text not null,
   title text not null,
   department_id uuid references departments(id) on delete cascade not null,
-  lecturer_id uuid references lecturers(id) on delete cascade not null,
+  level text not null,
+  semester text not null,
+  credit_unit integer not null default 0,
+  academic_session text not null,
   status text not null default 'active' check (status in ('active', 'inactive')),
   created_at timestamptz default now(),
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  unique(code, department_id, academic_session, semester)
+);
+
+-- Course Allocations (lecturer → course per session)
+create table if not exists course_allocations (
+  course_id uuid references courses(id) on delete cascade not null,
+  lecturer_id uuid references lecturers(id) on delete cascade not null,
+  academic_session text not null,
+  semester text not null,
+  created_at timestamptz default now(),
+  primary key (course_id, lecturer_id, academic_session, semester)
+);
+
+-- Course Registrations (student → course per session, derived)
+create table if not exists course_registrations (
+  student_id uuid references students(id) on delete cascade not null,
+  course_id uuid references courses(id) on delete cascade not null,
+  academic_session text not null,
+  semester text not null,
+  status text not null default 'enrolled' check (status in ('enrolled', 'withdrawn', 'completed')),
+  registered_at timestamptz default now(),
+  source text not null default 'auto' check (source in ('auto', 'manual')),
+  primary key (student_id, course_id, academic_session, semester)
 );
 
 -- Exams
@@ -82,7 +121,7 @@ create table if not exists exams (
   id uuid default uuid_generate_v4() primary key,
   title text not null,
   course_id uuid references courses(id) on delete cascade not null,
-  lecturer_id uuid references lecturers(id) on delete cascade not null,
+  created_by_lecturer_id uuid references lecturers(id) on delete set null,
   instructions text not null default '',
   duration_minutes integer not null default 60,
   start_time timestamptz,
@@ -195,10 +234,10 @@ create index if not exists idx_departments_faculty on departments(faculty_id);
 create index if not exists idx_lecturers_department on lecturers(department_id);
 create index if not exists idx_lecturers_faculty on lecturers(faculty_id);
 create index if not exists idx_students_department on students(department_id);
-create index if not exists idx_students_lecturer on students(lecturer_id);
+create index if not exists idx_students_programme on students(programme_id);
 create index if not exists idx_courses_department on courses(department_id);
-create index if not exists idx_courses_lecturer on courses(lecturer_id);
-create index if not exists idx_exams_lecturer on exams(lecturer_id);
+create index if not exists idx_courses_level on courses(level);
+create index if not exists idx_exams_created_by on exams(created_by_lecturer_id);
 create index if not exists idx_exams_course on exams(course_id);
 create index if not exists idx_exams_status on exams(status);
 create index if not exists idx_questions_exam on questions(exam_id);
@@ -213,6 +252,11 @@ create index if not exists idx_results_exam on results(exam_id);
 create index if not exists idx_violations_attempt on violations(attempt_id);
 create index if not exists idx_violations_student on violations(student_id);
 create index if not exists idx_activity_logs_attempt on activity_logs(attempt_id);
+create index if not exists idx_programmes_department on programmes(department_id);
+create index if not exists idx_allocations_course on course_allocations(course_id);
+create index if not exists idx_allocations_lecturer on course_allocations(lecturer_id);
+create index if not exists idx_registrations_student on course_registrations(student_id);
+create index if not exists idx_registrations_course on course_registrations(course_id);
 
 -- RLS Policies
 alter table profiles enable row level security;
@@ -299,43 +343,44 @@ create policy "Lecturers can view own record" on lecturers
 create policy "Admins can view all lecturers" on lecturers
   for select using (get_user_role() = 'admin');
 
--- Students: lecturers manage their students, admin views all
-create policy "Lecturers can manage their students" on students
-  for all using (
-    get_user_role() = 'lecturer' and
-    lecturer_id = get_lecturer_id()
-  );
-
-create policy "Admins can view all students" on students
-  for select using (get_user_role() = 'admin');
-
-create policy "Admins can insert students" on students
-  for insert with check (get_user_role() = 'admin');
+-- Students: admin can manage, students view own, lecturers view via allocations
+create policy "Admins can manage students" on students
+  for all using (get_user_role() = 'admin');
 
 create policy "Students can view own record" on students
   for select using (profile_id = auth.uid());
 
--- Courses: lecturer manages own, admin views all
-create policy "Lecturers can manage own courses" on courses
-  for all using (
+create policy "Lecturers can view students in their courses" on students
+  for select using (
     get_user_role() = 'lecturer' and
-    lecturer_id = get_lecturer_id()
+    id in (
+      select cr.student_id from course_registrations cr
+      join course_allocations ca on ca.course_id = cr.course_id
+      where ca.lecturer_id = get_lecturer_id()
+    )
   );
 
-create policy "Admins can view all courses" on courses
-  for select using (get_user_role() = 'admin');
+-- Courses: admin can manage, students view enrolled courses, lecturers view allocated courses
+create policy "Admins can manage courses" on courses
+  for all using (get_user_role() = 'admin');
 
-create policy "Students can view courses in their department" on courses
+create policy "Students can view courses they are enrolled in" on courses
   for select using (
     get_user_role() = 'student' and
-    department_id = (select department_id from students where profile_id = auth.uid())
+    id in (select course_id from course_registrations where student_id = get_student_id())
   );
 
--- Exams: lecturer manages own, students see published assigned
-create policy "Lecturers can manage own exams" on exams
+create policy "Lecturers can view allocated courses" on courses
+  for select using (
+    get_user_role() = 'lecturer' and
+    id in (select course_id from course_allocations where lecturer_id = get_lecturer_id())
+  );
+
+-- Exams: lecturer manages allocated course exams, students see published assigned
+create policy "Lecturers can manage exams for allocated courses" on exams
   for all using (
     get_user_role() = 'lecturer' and
-    lecturer_id = get_lecturer_id()
+    created_by_lecturer_id = get_lecturer_id()
   );
 
 create policy "Admins can view all exams" on exams
@@ -348,11 +393,11 @@ create policy "Students can view assigned published exams" on exams
     id in (select exam_id from exam_students where student_id = get_student_id())
   );
 
--- Questions: lecturer manages via exam ownership
+-- Questions: lecturer manages via allocated course exams
 create policy "Lecturers can manage questions for own exams" on questions
   for all using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Students can view questions during active attempts" on questions
@@ -372,7 +417,7 @@ create policy "Lecturers can manage options for own exam questions" on question_
     question_id in (
       select q.id from questions q
       join exams e on e.id = q.exam_id
-      where e.lecturer_id = get_lecturer_id()
+      where e.created_by_lecturer_id = get_lecturer_id()
     )
   );
 
@@ -390,7 +435,7 @@ create policy "Students can view options during active attempts" on question_opt
 create policy "Lecturers can manage exam assignments" on exam_students
   for all using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Students can view own assignments" on exam_students
@@ -409,7 +454,7 @@ create policy "Students can create and update own attempts" on exam_attempts
 create policy "Lecturers can view attempts for own exams" on exam_attempts
   for select using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Admins can view all attempts" on exam_attempts
@@ -428,7 +473,7 @@ create policy "Lecturers can view answers for own exams" on student_answers
     attempt_id in (
       select ea.id from exam_attempts ea
       join exams e on e.id = ea.exam_id
-      where e.lecturer_id = get_lecturer_id()
+      where e.created_by_lecturer_id = get_lecturer_id()
     )
   );
 
@@ -442,7 +487,7 @@ create policy "Students can view own results" on results
 create policy "Lecturers can view results for own exams" on results
   for select using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Admins can view all results" on results
@@ -461,7 +506,7 @@ create policy "Students can view own violations" on violations
 create policy "Lecturers can view violations for own exams" on violations
   for select using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Admins can view all violations" on violations
@@ -480,7 +525,7 @@ create policy "Students can view own activity logs" on activity_logs
 create policy "Lecturers can view activity for own exams" on activity_logs
   for select using (
     get_user_role() = 'lecturer' and
-    exam_id in (select id from exams where lecturer_id = get_lecturer_id())
+    exam_id in (select id from exams where created_by_lecturer_id = get_lecturer_id())
   );
 
 create policy "Admins can view all activity logs" on activity_logs
@@ -540,4 +585,116 @@ create trigger update_courses_updated_at before update on courses
 create trigger update_exams_updated_at before update on exams
   for each row execute function update_updated_at();
 create trigger update_questions_updated_at before update on questions
+  for each row execute function update_updated_at();
+
+-- RLS: course_allocations
+alter table course_allocations enable row level security;
+
+create policy "Admins can manage allocations" on course_allocations
+  for all using (get_user_role() = 'admin');
+
+create policy "Lecturers can view own allocations" on course_allocations
+  for select using (lecturer_id = get_lecturer_id());
+
+create policy "Students can view allocations for their courses" on course_allocations
+  for select using (
+    get_user_role() = 'student' and
+    course_id in (select course_id from course_registrations where student_id = get_student_id())
+  );
+
+-- RLS: course_registrations
+alter table course_registrations enable row level security;
+
+create policy "Admins can manage registrations" on course_registrations
+  for all using (get_user_role() = 'admin');
+
+create policy "Students can view own registrations" on course_registrations
+  for select using (student_id = get_student_id());
+
+create policy "Lecturers can view registrations for their courses" on course_registrations
+  for select using (
+    get_user_role() = 'lecturer' and
+    course_id in (select course_id from course_allocations where lecturer_id = get_lecturer_id())
+  );
+
+create policy "System can insert registrations" on course_registrations
+  for insert with check (auth.role() = 'authenticated');
+
+-- Auto-enroll trigger: when a student is inserted/updated, register them
+-- into every active course in their department at their level.
+create or replace function sync_course_registrations_for_student()
+returns trigger security definer as $$
+declare
+  v_dept uuid;
+  v_level text;
+  v_status text;
+begin
+  v_dept := coalesce(new.department_id, old.department_id);
+  v_level := coalesce(new.level, old.level);
+  v_status := coalesce(new.status, old.status);
+
+  if v_status = 'active' and v_dept is not null and v_level is not null then
+    insert into course_registrations (student_id, course_id, academic_session, semester, source)
+    select new.id, c.id, c.academic_session, c.semester, 'auto'
+    from courses c
+    where c.status = 'active'
+      and c.department_id = v_dept
+      and c.level = v_level
+      and c.academic_session is not null
+      and c.semester is not null
+    on conflict (student_id, course_id, academic_session, semester) do nothing;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_sync_student_registrations on students;
+create trigger trg_sync_student_registrations
+  after insert or update of department_id, level, status on students
+  for each row execute function sync_course_registrations_for_student();
+
+-- Auto-enroll trigger: when a course is inserted/updated, register all
+-- matching active students.
+create or replace function sync_course_registrations_for_course()
+returns trigger security definer as $$
+declare
+  v_dept uuid;
+  v_level text;
+  v_session text;
+  v_semester text;
+  v_status text;
+begin
+  v_dept := coalesce(new.department_id, old.department_id);
+  v_level := coalesce(new.level, old.level);
+  v_session := coalesce(new.academic_session, old.academic_session);
+  v_semester := coalesce(new.semester, old.semester);
+  v_status := coalesce(new.status, old.status);
+
+  if v_status = 'active' and v_dept is not null and v_level is not null
+     and v_session is not null and v_semester is not null then
+    insert into course_registrations (student_id, course_id, academic_session, semester, source)
+    select s.id, new.id, v_session, v_semester, 'auto'
+    from students s
+    where s.status = 'active'
+      and s.department_id = v_dept
+      and s.level = v_level
+    on conflict (student_id, course_id, academic_session, semester) do nothing;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_sync_course_registrations on courses;
+create trigger trg_sync_course_registrations
+  after insert or update of department_id, level, status, academic_session, semester on courses
+  for each row execute function sync_course_registrations_for_course();
+
+-- Update timestamps triggers for new tables
+create trigger update_programmes_updated_at before update on programmes
+  for each row execute function update_updated_at();
+
+create trigger update_allocations_updated_at before update on course_allocations
+  for each row execute function update_updated_at();
+
+create trigger update_registrations_updated_at before update on course_registrations
   for each row execute function update_updated_at();

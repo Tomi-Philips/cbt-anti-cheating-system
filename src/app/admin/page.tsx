@@ -153,6 +153,20 @@ export default function AdminDashboard() {
             <div className="text-xs text-[var(--text-secondary)] mt-1">Organize departments by faculty</div>
           </a>
           <a
+            href="/admin/programmes"
+            className="p-4 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--bg-active)] transition-colors text-center"
+          >
+            <div className="text-sm font-medium text-[var(--text)]">Manage Programmes</div>
+            <div className="text-xs text-[var(--text-secondary)] mt-1">Degree programmes per department</div>
+          </a>
+          <a
+            href="/admin/courses"
+            className="p-4 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--bg-active)] transition-colors text-center"
+          >
+            <div className="text-sm font-medium text-[var(--text)]">Manage Courses</div>
+            <div className="text-xs text-[var(--text-secondary)] mt-1">Courses, levels, semesters and allocations</div>
+          </a>
+          <a
             href="/admin/lecturers"
             className="p-4 rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--bg-active)] transition-colors text-center"
           >

@@ -1,288 +1,71 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
-import { getFaculties, createFaculty, updateFaculty, deleteFaculty } from "@/lib/actions";
-import { Button, Card, Input, Modal, Badge } from "@/components/ui";
-import { Toaster, toast } from "sonner";
+import { getDepartments, getFaculties } from "@/lib/actions";
+import { Card, Badge } from "@/components/ui";
 
-interface Faculty {
-  id: string;
-  name: string;
-  code: string;
-  description: string | null;
-  status: string;
-  created_at: string;
-}
+interface Faculty { id: string; name: string; code: string }
+interface Department { id: string; name: string; code: string; faculty_id: string; status: string; faculty?: { name: string } }
 
 export default function FacultiesPage() {
   const [faculties, setFaculties] = useState<Faculty[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [editing, setEditing] = useState<Faculty | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState("");
-
-  const [form, setForm] = useState({
-    name: "",
-    code: "",
-    description: "",
-    status: "active",
-  });
 
   useEffect(() => {
-    loadFaculties();
+    Promise.all([getFaculties(), getDepartments()])
+      .then(([f, d]) => { setFaculties(f); setDepartments(d); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
-  async function loadFaculties() {
-    try {
-      const data = await getFaculties();
-      setFaculties(data);
-    } catch {
-      toast.error("Failed to load faculties");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function openCreate() {
-    setEditing(null);
-    setForm({ name: "", code: "", description: "", status: "active" });
-    setShowModal(true);
-  }
-
-  function openEdit(faculty: Faculty) {
-    setEditing(faculty);
-    setForm({
-      name: faculty.name,
-      code: faculty.code,
-      description: faculty.description || "",
-      status: faculty.status,
-    });
-    setShowModal(true);
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-
-    const formData = new FormData();
-    formData.set("name", form.name);
-    formData.set("code", form.code);
-    formData.set("description", form.description);
-    formData.set("status", form.status);
-
-    try {
-      const result = editing
-        ? await updateFaculty(editing.id, formData)
-        : await createFaculty(formData);
-
-      if (result.error) {
-        toast.error(result.error);
-        return;
-      }
-
-      toast.success(editing ? "Faculty updated" : "Faculty created");
-      setShowModal(false);
-      loadFaculties();
-    } catch {
-      toast.error("An error occurred");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm("Are you sure you want to delete this faculty?")) return;
-
-    try {
-      const result = await deleteFaculty(id);
-      if (result.error) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success("Faculty deleted");
-      loadFaculties();
-    } catch {
-      toast.error("Failed to delete faculty");
-    }
-  }
-
-  const filtered = faculties.filter(
-    (f) =>
-      f.name.toLowerCase().includes(search.toLowerCase()) ||
-      f.code.toLowerCase().includes(search.toLowerCase())
-  );
+  const grouped = faculties.map((f) => ({
+    faculty: f,
+    departments: departments.filter((d) => d.faculty_id === f.id),
+  }));
 
   return (
     <div className="space-y-6 animate-fadeIn">
-      <Toaster position="top-right" />
-
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text)]">Faculties</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">
-            Manage academic faculties
-          </p>
-        </div>
-        <Button onClick={openCreate}>Add Faculty</Button>
+      <div>
+        <h1 className="text-2xl font-bold text-[var(--text)]">Faculties &amp; Departments</h1>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">Academic organizational structure</p>
       </div>
-
-      {/* Search */}
-      <div className="max-w-sm">
-        <input
-          type="text"
-          placeholder="Search faculties..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full px-3 py-2 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-        />
-      </div>
-
-      {/* Table */}
-      <Card padding={false}>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[var(--border)]">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">
-                  Name
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">
-                  Code
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-[var(--text-secondary)] uppercase">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--border)]">
-              {loading ? (
-                [...Array(3)].map((_, i) => (
-                  <tr key={i}>
-                    {[...Array(4)].map((_, j) => (
-                      <td key={j} className="px-4 py-3">
-                        <div className="h-4 bg-gray-100 rounded animate-pulse" />
-                      </td>
+      {loading ? (
+        <div className="text-sm text-[var(--text-secondary)]">Loading...</div>
+      ) : (
+        <div className="space-y-4">
+          {grouped.map(({ faculty, departments: deptList }) => (
+            <Card key={faculty.id}>
+              <div className="p-4 border-b border-[var(--border)]">
+                <h2 className="font-semibold text-[var(--text)]">{faculty.name}</h2>
+                <p className="text-xs text-[var(--text-secondary)]">Code: {faculty.code}</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[var(--border)]">
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">Department</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">Code</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-[var(--text-secondary)] uppercase">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border)]">
+                    {deptList.length === 0 ? (
+                      <tr><td colSpan={3} className="px-4 py-6 text-center text-sm text-[var(--text-secondary)]">No departments</td></tr>
+                    ) : deptList.map((d) => (
+                      <tr key={d.id}>
+                        <td className="px-4 py-3 text-sm text-[var(--text)]">{d.name}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-[var(--text-secondary)]">{d.code}</td>
+                        <td className="px-4 py-3"><Badge variant={d.status === "active" ? "success" : "default"}>{d.status}</Badge></td>
+                      </tr>
                     ))}
-                  </tr>
-                ))
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm text-[var(--text-secondary)]">
-                    No faculties found
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((faculty) => (
-                  <tr
-                    key={faculty.id}
-                    className="hover:bg-[var(--bg-secondary)] transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="text-sm font-medium text-[var(--text)]">
-                        {faculty.name}
-                      </div>
-                      {faculty.description && (
-                        <div className="text-xs text-[var(--text-secondary)] mt-0.5">
-                          {faculty.description}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-sm font-mono">{faculty.code}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={faculty.status === "active" ? "success" : "default"}>
-                        {faculty.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => openEdit(faculty)}
-                          className="text-sm text-[var(--primary)] hover:text-[var(--primary-dark)]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(faculty.id)}
-                          className="text-sm text-red-600 hover:text-red-700"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          ))}
         </div>
-      </Card>
-
-      {/* Modal */}
-      <Modal
-        isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        title={editing ? "Edit Faculty" : "Add Faculty"}
-      >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label="Faculty Name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="e.g. Faculty of Computing"
-            required
-          />
-          <Input
-            label="Faculty Code"
-            value={form.code}
-            onChange={(e) => setForm({ ...form, code: e.target.value })}
-            placeholder="e.g. FOC"
-            required
-          />
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-[var(--text)]">
-              Description
-            </label>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="w-full px-3 py-2 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)] resize-none"
-              rows={3}
-              placeholder="Optional description"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-[var(--text)]">
-              Status
-            </label>
-            <select
-              value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value })}
-              className="w-full px-3 py-2 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-            >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </select>
-          </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowModal(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" loading={saving}>
-              {editing ? "Update" : "Create"}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+      )}
     </div>
   );
 }

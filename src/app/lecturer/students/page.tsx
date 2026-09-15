@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getCurrentLecturer, getStudents, createStudent } from "@/lib/actions";
-import { Button, Card, Input, Modal, Badge } from "@/components/ui";
+import { getCurrentLecturer, getRegistrations } from "@/lib/actions";
+import { Card, Badge } from "@/components/ui";
 import { Toaster, toast } from "sonner";
 
 interface StudentRecord {
@@ -10,37 +10,28 @@ interface StudentRecord {
   student_id: string;
   level: string;
   status: string;
-  created_at: string;
   profile?: { id: string; full_name: string; email: string };
   department?: { name: string };
-  faculty?: { name: string };
 }
 
 export default function LecturerStudentsPage() {
   const [students, setStudents] = useState<StudentRecord[]>([]);
-  const [lecturer, setLecturer] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [filterLevel, setFilterLevel] = useState("");
-  const [defaultPassword, setDefaultPassword] = useState("");
-
-  const [form, setForm] = useState({
-    full_name: "",
-    email: "",
-    student_id: "",
-    level: "",
-  });
 
   useEffect(() => {
     async function load() {
       try {
         const lect = await getCurrentLecturer();
-        setLecturer(lect);
         if (lect) {
-          const data = await getStudents(lect.id);
-          setStudents(data);
+          const data = await getRegistrations(undefined, undefined, lect.id);
+          // De-duplicate students across courses
+          const map = new Map<string, StudentRecord>();
+          (data || []).forEach((r: { student?: StudentRecord }) => {
+            if (r.student && !map.has(r.student.id)) map.set(r.student.id, r.student);
+          });
+          setStudents(Array.from(map.values()));
         }
       } catch {
         toast.error("Failed to load students");
@@ -50,39 +41,6 @@ export default function LecturerStudentsPage() {
     }
     load();
   }, []);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-
-    const formData = new FormData();
-    formData.set("full_name", form.full_name);
-    formData.set("email", form.email);
-    formData.set("student_id", form.student_id);
-    formData.set("level", form.level);
-    formData.set("department_id", lecturer.department_id);
-    formData.set("faculty_id", lecturer.faculty_id);
-    formData.set("lecturer_id", lecturer.id);
-
-    try {
-      const result = await createStudent(formData);
-      if (result.error) {
-        toast.error(result.error);
-        return;
-      }
-
-      setDefaultPassword(result.defaultPassword || "");
-      toast.success("Student created successfully");
-      setShowModal(false);
-      const data = await getStudents(lecturer.id);
-      setStudents(data);
-      setForm({ full_name: "", email: "", student_id: "", level: "" });
-    } catch {
-      toast.error("An error occurred");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   const levels = ["100", "200", "300", "400", "500", "600", "700", "800"];
   const filtered = students.filter(
@@ -99,9 +57,8 @@ export default function LecturerStudentsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Students</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Manage students under your academic supervision</p>
+          <p className="text-sm text-[var(--text-secondary)] mt-1">Students enrolled in your allocated courses</p>
         </div>
-        <Button onClick={() => setShowModal(true)}>Add Student</Button>
       </div>
 
       <div className="flex gap-3 max-w-xl">
@@ -138,7 +95,7 @@ export default function LecturerStudentsPage() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-sm text-[var(--text-secondary)]">
-                    No students found. Add students under your academic responsibility.
+                    No students found
                   </td>
                 </tr>
               ) : (
@@ -160,46 +117,6 @@ export default function LecturerStudentsPage() {
           </table>
         </div>
       </Card>
-
-      {/* Default password display */}
-      {defaultPassword && (
-        <Modal isOpen={!!defaultPassword} onClose={() => setDefaultPassword("")} title="Student Created">
-          <div className="space-y-3">
-            <p className="text-sm text-[var(--text-secondary)]">
-              The student account has been created. Share this default password with the student:
-            </p>
-            <div className="p-3 bg-gray-50 rounded-lg font-mono text-sm text-center">
-              {defaultPassword}
-            </div>
-            <Button onClick={() => setDefaultPassword("")} className="w-full">Done</Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Create Student Modal */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="Add Student">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input label="Full Name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} placeholder="e.g. John Doe" required />
-          <Input label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="student@university.edu" required />
-          <Input label="Student ID" value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })} placeholder="e.g. STU2024001" required />
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-[var(--text)]">Level</label>
-            <select value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })} className="w-full px-3 py-2 border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]" required>
-              <option value="">Select Level</option>
-              {levels.map((l) => (
-                <option key={l} value={l}>Level {l}</option>
-              ))}
-            </select>
-          </div>
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
-            The student will be assigned to your department ({lecturer?.department?.name}) and faculty ({lecturer?.faculty?.name}). The default password is password123.
-          </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Create</Button>
-          </div>
-        </form>
-      </Modal>
     </div>
   );
 }
