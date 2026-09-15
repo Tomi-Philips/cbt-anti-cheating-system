@@ -24,7 +24,7 @@ export default function LecturerStudentsPage() {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [filterLevel, setFilterLevel] = useState("");
-  const [tempPassword, setTempPassword] = useState("");
+  const [defaultPassword, setDefaultPassword] = useState("");
 
   const [form, setForm] = useState({
     full_name: "",
@@ -71,7 +71,7 @@ export default function LecturerStudentsPage() {
         return;
       }
 
-      setTempPassword(result.tempPassword || "");
+      setDefaultPassword(result.defaultPassword || "");
       toast.success("Student created successfully");
       setShowModal(false);
       const data = await getStudents(lecturer.id);
@@ -161,20 +161,17 @@ export default function LecturerStudentsPage() {
         </div>
       </Card>
 
-      {/* Temporary password display */}
-      {tempPassword && (
-        <Modal isOpen={!!tempPassword} onClose={() => setTempPassword("")} title="Student Created">
+      {/* Default password display */}
+      {defaultPassword && (
+        <Modal isOpen={!!defaultPassword} onClose={() => setDefaultPassword("")} title="Student Created">
           <div className="space-y-3">
             <p className="text-sm text-[var(--text-secondary)]">
-              The student account has been created. Share this temporary password with the student:
+              The student account has been created. Share this default password with the student:
             </p>
             <div className="p-3 bg-gray-50 rounded-lg font-mono text-sm text-center">
-              {tempPassword}
+              {defaultPassword}
             </div>
-            <p className="text-xs text-[var(--text-secondary)]">
-              The student should change this password after first login.
-            </p>
-            <Button onClick={() => setTempPassword("")} className="w-full">Done</Button>
+            <Button onClick={() => setDefaultPassword("")} className="w-full">Done</Button>
           </div>
         </Modal>
       )}
@@ -195,7 +192,7 @@ export default function LecturerStudentsPage() {
             </select>
           </div>
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
-            The student will be assigned to your department ({lecturer?.department?.name}) and faculty ({lecturer?.faculty?.name}). A temporary password will be generated.
+            The student will be assigned to your department ({lecturer?.department?.name}) and faculty ({lecturer?.faculty?.name}). The default password is password123.
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>

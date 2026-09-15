@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+const DEFAULT_STUDENT_PASSWORD = "password123";
+
 // Auth actions
 export async function signIn(email: string, password: string) {
   const supabase = await createClient();
@@ -385,8 +387,7 @@ export async function createStudent(formData: FormData) {
   const facultyId = formData.get("faculty_id") as string;
   const lecturerId = formData.get("lecturer_id") as string;
 
-  // Generate a temporary password
-  const password = `student${Date.now().toString(36)}`;
+  const password = DEFAULT_STUDENT_PASSWORD;
 
   // Create auth user using admin client (requires service role key)
   const adminClient = createAdminClient();
@@ -433,7 +434,7 @@ export async function createStudent(formData: FormData) {
   if (error) return { error: error.message };
 
   revalidatePath("/lecturer/students");
-  return { success: true, tempPassword: password };
+  return { success: true, defaultPassword: password };
 }
 
 export async function updateStudent(id: string, formData: FormData) {
@@ -1360,7 +1361,7 @@ export async function bulkCreateStudents(
     }
 
     // Create auth user
-    const password = `student${Date.now().toString(36)}`;
+    const password = DEFAULT_STUDENT_PASSWORD;
     const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
       email,
       password,
