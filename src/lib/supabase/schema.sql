@@ -1,8 +1,81 @@
 -- CBT Anti-Cheating System Database Schema
 -- Run this in Supabase SQL Editor
+-- This file is idempotent: safe to run multiple times.
 
 -- Enable UUID extension
 create extension if not exists "uuid-ossp";
+
+-- ============================================================
+-- Drop ALL existing policies first so this script is idempotent.
+-- ============================================================
+DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
+DROP POLICY IF EXISTS "Admins can view all profiles" ON profiles;
+DROP POLICY IF EXISTS "Authenticated users can insert own profile" ON profiles;
+DROP POLICY IF EXISTS "Admins can update any profile" ON profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
+DROP POLICY IF EXISTS "Lecturers can view enrolled students profiles" ON profiles;
+DROP POLICY IF EXISTS "Authenticated users can view faculties" ON faculties;
+DROP POLICY IF EXISTS "Admins can manage faculties" ON faculties;
+DROP POLICY IF EXISTS "Authenticated users can view departments" ON departments;
+DROP POLICY IF EXISTS "Admins can manage departments" ON departments;
+DROP POLICY IF EXISTS "Admins can manage lecturers" ON lecturers;
+DROP POLICY IF EXISTS "Lecturers can view own record" ON lecturers;
+DROP POLICY IF EXISTS "Admins can view all lecturers" ON lecturers;
+DROP POLICY IF EXISTS "Admins can manage students" ON students;
+DROP POLICY IF EXISTS "Students can view own record" ON students;
+DROP POLICY IF EXISTS "Lecturers can view students in their courses" ON students;
+DROP POLICY IF EXISTS "Admins can manage courses" ON courses;
+DROP POLICY IF EXISTS "Students can view courses they are enrolled in" ON courses;
+DROP POLICY IF EXISTS "Lecturers can view allocated courses" ON courses;
+DROP POLICY IF EXISTS "Lecturers can manage exams for allocated courses" ON exams;
+DROP POLICY IF EXISTS "Admins can view all exams" ON exams;
+DROP POLICY IF EXISTS "Students can view assigned published exams" ON exams;
+DROP POLICY IF EXISTS "Lecturers can manage questions for own exams" ON questions;
+DROP POLICY IF EXISTS "Students can view questions during active attempts" ON questions;
+DROP POLICY IF EXISTS "Lecturers can manage options for own exam questions" ON question_options;
+DROP POLICY IF EXISTS "Students can view options during active attempts" ON question_options;
+DROP POLICY IF EXISTS "Lecturers can manage exam assignments" ON exam_students;
+DROP POLICY IF EXISTS "Students can view own assignments" ON exam_students;
+DROP POLICY IF EXISTS "Students can create and update own attempts" ON exam_attempts;
+DROP POLICY IF EXISTS "Lecturers can view attempts for own exams" ON exam_attempts;
+DROP POLICY IF EXISTS "Admins can view all attempts" ON exam_attempts;
+DROP POLICY IF EXISTS "Students can manage own answers" ON student_answers;
+DROP POLICY IF EXISTS "Lecturers can view answers for own exams" ON student_answers;
+DROP POLICY IF EXISTS "Students can view own results" ON results;
+DROP POLICY IF EXISTS "Lecturers can view results for own exams" ON results;
+DROP POLICY IF EXISTS "Admins can view all results" ON results;
+DROP POLICY IF EXISTS "System can insert results" ON results;
+DROP POLICY IF EXISTS "Students can view own violations" ON violations;
+DROP POLICY IF EXISTS "Lecturers can view violations for own exams" ON violations;
+DROP POLICY IF EXISTS "Admins can view all violations" ON violations;
+DROP POLICY IF EXISTS "Authenticated users can insert violations" ON violations;
+DROP POLICY IF EXISTS "Students can view own activity logs" ON activity_logs;
+DROP POLICY IF EXISTS "Lecturers can view activity for own exams" ON activity_logs;
+DROP POLICY IF EXISTS "Admins can view all activity logs" ON activity_logs;
+DROP POLICY IF EXISTS "Authenticated users can insert activity logs" ON activity_logs;
+DROP POLICY IF EXISTS "Admins can manage allocations" ON course_allocations;
+DROP POLICY IF EXISTS "Lecturers can view own allocations" ON course_allocations;
+DROP POLICY IF EXISTS "Students can view allocations for their courses" ON course_allocations;
+DROP POLICY IF EXISTS "Admins can manage registrations" ON course_registrations;
+DROP POLICY IF EXISTS "Students can view own registrations" ON course_registrations;
+DROP POLICY IF EXISTS "Lecturers can view registrations for their courses" ON course_registrations;
+DROP POLICY IF EXISTS "System can insert registrations" ON course_registrations;
+
+-- Drop existing triggers so this script is idempotent
+DROP TRIGGER IF EXISTS update_profiles_updated_at ON profiles;
+DROP TRIGGER IF EXISTS update_faculties_updated_at ON faculties;
+DROP TRIGGER IF EXISTS update_departments_updated_at ON departments;
+DROP TRIGGER IF EXISTS update_lecturers_updated_at ON lecturers;
+DROP TRIGGER IF EXISTS update_students_updated_at ON students;
+DROP TRIGGER IF EXISTS update_courses_updated_at ON courses;
+DROP TRIGGER IF EXISTS update_exams_updated_at ON exams;
+DROP TRIGGER IF EXISTS update_questions_updated_at ON questions;
+DROP TRIGGER IF EXISTS update_programmes_updated_at ON programmes;
+DROP TRIGGER IF EXISTS update_allocations_updated_at ON course_allocations;
+DROP TRIGGER IF EXISTS update_registrations_updated_at ON course_registrations;
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS trg_sync_student_registrations ON students;
+DROP TRIGGER IF EXISTS trg_sync_course_registrations ON courses;
 
 -- Profiles table (common user data)
 create table if not exists profiles (
@@ -293,6 +366,42 @@ returns uuid as $$
   select id from students where profile_id = auth.uid();
 $$ language sql security definer stable;
 
+-- Security definer helpers that bypass RLS to break policy recursion cycles.
+-- These read the role from profiles WITHOUT being subject to RLS,
+-- so they can be safely used inside other tables' policies.
+create or replace function is_admin()
+returns boolean as $$
+  select coalesce((select role from profiles where id = auth.uid()), '') = 'admin'
+$$ language sql security definer stable;
+
+create or replace function is_lecturer()
+returns boolean as $$
+  select coalesce((select role from profiles where id = auth.uid()), '') = 'lecturer'
+$$ language sql security definer stable;
+
+create or replace function is_student()
+returns boolean as $$
+  select coalesce((select role from profiles where id = auth.uid()), '') = 'student'
+$$ language sql security definer stable;
+
+-- Security definer helpers that bypass RLS to break policy recursion cycles
+create or replace function get_lecturer_allocated_course_ids()
+returns setof uuid as $$
+  select course_id from course_allocations where lecturer_id = get_lecturer_id();
+$$ language sql security definer stable;
+
+create or replace function get_student_enrolled_course_ids()
+returns setof uuid as $$
+  select course_id from course_registrations where student_id = get_student_id();
+$$ language sql security definer stable;
+
+create or replace function get_lecturer_enrolled_student_ids()
+returns setof uuid as $$
+  select cr.student_id from course_registrations cr
+  join course_allocations ca on ca.course_id = cr.course_id
+  where ca.lecturer_id = get_lecturer_id();
+$$ language sql security definer stable;
+
 -- RPC function to increment violation count on exam attempts
 create or replace function increment_violation_count(attempt_id uuid)
 returns void as $$
@@ -303,18 +412,14 @@ begin
 end;
 $$ language plpgsql security definer;
 
--- Profiles: users can read their own, admins can read all
+-- Profiles: users can read/update their own only.
+-- Admin access to all profiles is handled by the admin client (service role),
+-- which bypasses RLS entirely. No function calls here = no recursion possible.
 create policy "Users can view own profile" on profiles
   for select using (id = auth.uid());
 
-create policy "Admins can view all profiles" on profiles
-  for select using (get_user_role() = 'admin');
-
 create policy "Authenticated users can insert own profile" on profiles
-  for insert with check (auth.uid() = id or get_user_role() = 'admin');
-
-create policy "Admins can update any profile" on profiles
-  for update using (get_user_role() = 'admin');
+  for insert with check (auth.uid() = id);
 
 create policy "Users can update own profile" on profiles
   for update using (id = auth.uid());
@@ -324,28 +429,28 @@ create policy "Authenticated users can view faculties" on faculties
   for select using (auth.role() = 'authenticated');
 
 create policy "Admins can manage faculties" on faculties
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 -- Departments: everyone can read, admin can manage
 create policy "Authenticated users can view departments" on departments
   for select using (auth.role() = 'authenticated');
 
 create policy "Admins can manage departments" on departments
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 -- Lecturers: admin can manage, lecturers can view own
 create policy "Admins can manage lecturers" on lecturers
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 create policy "Lecturers can view own record" on lecturers
   for select using (profile_id = auth.uid());
 
 create policy "Admins can view all lecturers" on lecturers
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 -- Students: admin can manage, students view own, lecturers view via allocations
 create policy "Admins can manage students" on students
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 create policy "Students can view own record" on students
   for select using (profile_id = auth.uid());
@@ -353,27 +458,23 @@ create policy "Students can view own record" on students
 create policy "Lecturers can view students in their courses" on students
   for select using (
     get_user_role() = 'lecturer' and
-    id in (
-      select cr.student_id from course_registrations cr
-      join course_allocations ca on ca.course_id = cr.course_id
-      where ca.lecturer_id = get_lecturer_id()
-    )
+    id in (select get_lecturer_enrolled_student_ids())
   );
 
 -- Courses: admin can manage, students view enrolled courses, lecturers view allocated courses
 create policy "Admins can manage courses" on courses
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 create policy "Students can view courses they are enrolled in" on courses
   for select using (
     get_user_role() = 'student' and
-    id in (select course_id from course_registrations where student_id = get_student_id())
+    id in (select get_student_enrolled_course_ids())
   );
 
 create policy "Lecturers can view allocated courses" on courses
   for select using (
     get_user_role() = 'lecturer' and
-    id in (select course_id from course_allocations where lecturer_id = get_lecturer_id())
+    id in (select get_lecturer_allocated_course_ids())
   );
 
 -- Exams: lecturer manages allocated course exams, students see published assigned
@@ -384,7 +485,7 @@ create policy "Lecturers can manage exams for allocated courses" on exams
   );
 
 create policy "Admins can view all exams" on exams
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 create policy "Students can view assigned published exams" on exams
   for select using (
@@ -458,7 +559,7 @@ create policy "Lecturers can view attempts for own exams" on exam_attempts
   );
 
 create policy "Admins can view all attempts" on exam_attempts
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 -- Student Answers: students manage own, lecturer views via exam
 create policy "Students can manage own answers" on student_answers
@@ -491,7 +592,7 @@ create policy "Lecturers can view results for own exams" on results
   );
 
 create policy "Admins can view all results" on results
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 create policy "System can insert results" on results
   for insert with check (auth.role() = 'authenticated');
@@ -510,7 +611,7 @@ create policy "Lecturers can view violations for own exams" on violations
   );
 
 create policy "Admins can view all violations" on violations
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 create policy "Authenticated users can insert violations" on violations
   for insert with check (auth.role() = 'authenticated');
@@ -529,7 +630,7 @@ create policy "Lecturers can view activity for own exams" on activity_logs
   );
 
 create policy "Admins can view all activity logs" on activity_logs
-  for select using (get_user_role() = 'admin');
+  for select using (is_admin());
 
 create policy "Authenticated users can insert activity logs" on activity_logs
   for insert with check (auth.role() = 'authenticated');
@@ -590,7 +691,7 @@ create trigger update_questions_updated_at before update on questions
 alter table course_allocations enable row level security;
 
 create policy "Admins can manage allocations" on course_allocations
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 create policy "Lecturers can view own allocations" on course_allocations
   for select using (lecturer_id = get_lecturer_id());
@@ -598,14 +699,14 @@ create policy "Lecturers can view own allocations" on course_allocations
 create policy "Students can view allocations for their courses" on course_allocations
   for select using (
     get_user_role() = 'student' and
-    course_id in (select course_id from course_registrations where student_id = get_student_id())
+    course_id in (select get_student_enrolled_course_ids())
   );
 
 -- RLS: course_registrations
 alter table course_registrations enable row level security;
 
 create policy "Admins can manage registrations" on course_registrations
-  for all using (get_user_role() = 'admin');
+  for all using (is_admin());
 
 create policy "Students can view own registrations" on course_registrations
   for select using (student_id = get_student_id());
@@ -613,7 +714,7 @@ create policy "Students can view own registrations" on course_registrations
 create policy "Lecturers can view registrations for their courses" on course_registrations
   for select using (
     get_user_role() = 'lecturer' and
-    course_id in (select course_id from course_allocations where lecturer_id = get_lecturer_id())
+    course_id in (select get_lecturer_allocated_course_ids())
   );
 
 create policy "System can insert registrations" on course_registrations

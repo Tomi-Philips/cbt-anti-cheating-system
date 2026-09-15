@@ -1142,27 +1142,24 @@ export async function getAdminStats() {
 export async function getLecturerStats(lecturerId: string) {
   const supabase = await createClient();
 
-  const [
-    { count: courses },
-    { count: activeExams },
-    { count: upcomingExams },
-    { count: results },
-    { count: students },
-  ] = await Promise.all([
-    supabase.from("course_allocations").select("*", { count: "exact", head: true }).eq("lecturer_id", lecturerId),
-    supabase.from("exams").select("*", { count: "exact", head: true }).eq("created_by_lecturer_id", lecturerId).eq("status", "active"),
-    supabase.from("exams").select("*", { count: "exact", head: true }).eq("created_by_lecturer_id", lecturerId).eq("status", "scheduled"),
-    supabase.from("results").select("*", { count: "exact", head: true }).eq("exam_id",
-      supabase.from("exams").select("id").eq("created_by_lecturer_id", lecturerId).limit(100) as any
-    ),
-    supabase.from("course_registrations").select("*", { count: "exact", head: true }).eq("course_id",
-      supabase.from("course_allocations").select("course_id").eq("lecturer_id", lecturerId) as any
-    ),
+  const [{ data: allocs }, { data: examsData }] = await Promise.all([
+    supabase.from("course_allocations").select("course_id").eq("lecturer_id", lecturerId),
+    supabase.from("exams").select("id, status").eq("created_by_lecturer_id", lecturerId),
+  ]);
+
+  const courseIds = (allocs || []).map((a: any) => a.course_id);
+  const examIds = (examsData || []).map((e: any) => e.id);
+  const activeExams = (examsData || []).filter((e: any) => e.status === "active").length;
+  const upcomingExams = (examsData || []).filter((e: any) => e.status === "scheduled").length;
+
+  const [{ count: students }, { count: results }] = await Promise.all([
+    supabase.from("course_registrations").select("*", { count: "exact", head: true }).in("course_id", courseIds.length ? courseIds : ["00000000-0000-0000-0000-000000000000"]),
+    supabase.from("results").select("*", { count: "exact", head: true }).in("exam_id", examIds.length ? examIds : ["00000000-0000-0000-0000-000000000000"]),
   ]);
 
   return {
     total_students: students || 0,
-    total_courses: courses || 0,
+    total_courses: courseIds.length,
     active_exams: activeExams || 0,
     upcoming_exams: upcomingExams || 0,
     recent_results: results || 0,
@@ -1328,9 +1325,13 @@ export async function getRegistrations(studentId?: string, courseId?: string, le
     query = query.eq("course_id", courseId);
   }
   if (lecturerId) {
-    query = query.eq("course_id",
-      supabase.from("course_allocations").select("course_id").eq("lecturer_id", lecturerId) as any
-    );
+    const { data: allocs } = await supabase
+      .from("course_allocations")
+      .select("course_id")
+      .eq("lecturer_id", lecturerId);
+    const courseIds = (allocs || []).map((a: any) => a.course_id);
+    if (courseIds.length === 0) return [];
+    query = query.in("course_id", courseIds);
   }
 
   const { data, error } = await query;
