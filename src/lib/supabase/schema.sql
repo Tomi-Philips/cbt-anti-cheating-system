@@ -538,14 +538,13 @@ create policy "Authenticated users can insert activity logs" on activity_logs
 create or replace function handle_new_user()
 returns trigger as $$
 begin
-  -- Temporarily become superuser to bypass RLS
-  perform set_config('role', 'postgres', true);
-  insert into profiles (id, full_name, email, role)
+  insert into profiles (id, full_name, email, role, status)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'full_name', new.email),
     new.email,
-    coalesce(new.raw_user_meta_data->>'role', 'student')
+    coalesce(new.raw_user_meta_data->>'role', 'student'),
+    coalesce(new.raw_user_meta_data->>'status', 'active')
   );
   return new;
 exception
