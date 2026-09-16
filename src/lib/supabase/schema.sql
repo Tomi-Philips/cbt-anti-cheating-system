@@ -424,6 +424,18 @@ create policy "Authenticated users can insert own profile" on profiles
 create policy "Users can update own profile" on profiles
   for update using (id = auth.uid());
 
+-- Lecturers can view profiles of students enrolled in their allocated courses.
+-- Uses security definer helpers to bypass RLS and avoid recursion.
+create policy "Lecturers can view enrolled students profiles" on profiles
+  for select using (
+    id in (
+      select s.profile_id from students s
+      join course_registrations cr on cr.student_id = s.id
+      join course_allocations ca on ca.course_id = cr.course_id
+      where ca.lecturer_id = get_lecturer_id()
+    )
+  );
+
 -- Faculties: everyone can read, admin can manage
 create policy "Authenticated users can view faculties" on faculties
   for select using (auth.role() = 'authenticated');

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getCurrentLecturer, getCourses, createExam } from "@/lib/actions";
+import { getCurrentLecturer, getAllocations, createExam } from "@/lib/actions";
 import { Button, Card, Input, Textarea } from "@/components/ui";
 import { Toaster, toast } from "sonner";
 
@@ -37,8 +37,18 @@ export default function CreateExamPage() {
         const lect = await getCurrentLecturer();
         setLecturer(lect);
         if (lect) {
-          const c = await getCourses(lect.id);
-          setCourses(c);
+          const allocs = await getAllocations(lect.id);
+          const uniqueCourses = new Map<string, Course>();
+          (allocs || []).forEach((a: any) => {
+            if (a.course && !uniqueCourses.has(a.course.id)) {
+              uniqueCourses.set(a.course.id, {
+                id: a.course.id,
+                code: a.course.code,
+                title: a.course.title,
+              });
+            }
+          });
+          setCourses(Array.from(uniqueCourses.values()));
         }
       } catch {
         toast.error("Failed to load data");
